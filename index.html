@@ -1,0 +1,303 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>DBFluteの紹介</title>
+
+		<meta name="description" content="A framework for easily creating beautiful presentations using HTML">
+		<meta name="author" content="Hakim El Hattab">
+
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, minimal-ui">
+
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/solarized.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+
+		<style type="text/css">
+		  .reveal h1,
+		  .reveal h2,
+		  .reveal h3,
+		  .reveal h4,
+		  .reveal h5,
+		  .reveal h6 {
+		    text-transform: none;
+		  }
+		</style>
+
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+
+				<section data-markdown data-separator="^\n---$" data-separator-vertical="^\n- - -$">
+					<script type="text/template">
+# DBFluteの紹介
+
+<p align="right">
+	@chichi1091  
+	2018.01.27  
+	SQLアンチパターン読書会スペシャル
+</p>
+
+---
+## 自己紹介
+<img src="images/chichi1091.png" width="10%" alt="chichi1091"/>
+
+* 寺嶋 千晴 (てらしま ちはる)
+* [てっしー/chichi1091](https://twitter.com/chichi1091)
+* 長野市内のちっちゃいSIerに勤務
+* Java、PHP、Python
+* 最近はPowerBIで疲弊してます。。
+
+---
+## DBFluteってなに？
+<img src="images/dbflute.png" width="30%" alt="logo"/>
+
+* 「DB変更に強い」をテーマにした開発支援ツール
+ * O/Rマッパー
+ * DB管理支援ツール
+* Seasarファウンデーションの一つだったが現在は独立したプロダクト
+
+---
+## O/Rマッパーとして
+
+* JavaとC#で利用可能（C#は機能制限あり、Scalaがβ版）
+* DBのメタ情報を元にソースコードを自動生成
+ * それによりタイプセーフな実装が可能
+* 外部キーから多重度を推測し、適切なフィールドを生成
+ * 「1:N」ならば1にList、NにTableクラス
+
+---
+## O/Rマッパーとして
+
+* 手書きSQLも実行可能
+* JDBCがあればOK
+* 独自トランザクション管理もない
+ * ただDIコンテナ必須(Seasar、Spring、Guice、LastaFlute、Quill)
+
+---
+### 主要クラス
+
+自動生成で作られるクラスたち  
+テーブルと1:1で作成される
+
+* Entity
+ * レコードの値を保持
+ * SELECT結果、INSERT/UPDATEの値を詰めるのに利用する
+* ConditionBean(CB)
+ * クエリ(条件)を組み立てるのに使用するクラス
+* Behavior(Bhv)
+ * CBを受け取り実際にSQLを発行するクラス
+
+---
+### 実装（SELECT）
+
+#### 一件検索
+
+```java
+MemberCB cb = new MemberCB();
+cb.query().setMemberCode_Equal("100");
+Member member = memberBhv.selectEntity(cb);
+```
+
+#### リスト検索
+
+```java
+MemberCB cb = new MemberCB();
+cb.query().setMemberName_LikePrefix("hoge");
+cb.query().addOrderBy_MemberCode_Asc();
+ListResultBean<Member> list = memberBhv.selectList(cb);
+```
+
+#### join
+
+```java
+MemberCB cb = new MemberCB();
+cb.query().setMemberCode_Equal("100");
+cb.setupSelect_MemberStatus();	// FKからJOINが可能と判断
+Member member = memberBhv.selectEntity(cb);
+OptionalEntity<MemberStatus> memberStatus = member.getMemberStatus();	// MemberStatusテーブル
+```
+
+---
+実装（外だしSQL）
+
+* パラメータコメントを利用して2Way-SQLとしてSQLファイルを実装
+
+```sql
+-- #df:entity#    (Entityを自動生成)
+-- !df:pmb!       (ParameterBeanを自動生成)
+-- !!AutoDetect!! (プロパティ項目を自動判別)
+select mb.MEMBER_ID
+     , mb.MEMBER_NAME
+     , stat.MEMBER_STATUS_NAME
+from MEMBER mb left outer join MEMBER_STATUS stat on
+	mb.MEMBER_STATUS_CODE = stat.MEMBER_STATUS_CODE
+ /*BEGIN*/
+ where
+   /*IF pmb.memberId != null*/
+   mb.MEMBER_ID = /*pmb.memberId*/3
+   /*END*/
+   /*IF pmb.memberName != null*/
+   and mb.MEMBER_NAME like /*pmb.memberName*/'M%'
+   /*END*/
+ /*END*/
+ order by mb.BIRTHDATE desc, mb.MEMBER_ID asc
+```
+
+---
+実装（外だしSQL）
+
+* 外だしSQLから自動生成されたクラスを使って同じように検索することができる
+
+```java
+SimpleMemberPmb pmb = new SimpleMemberPmb();
+pmb.setMemberName_PrefixSearch("S");
+ListResultBean<SimpleMember> memberList
+		= memberBhv.outsideSql().selectList(pmb);
+```
+
+---
+### 実装（更新系）
+
+#### 新規登録
+
+```java
+Member member = new Member();
+member.setMemberCode("200");
+member.setMemberName("fuga");
+memberBhv.insert(member);
+```
+
+#### 更新
+
+```java
+Member member = new Member();
+member.setMemberCode("200");
+member.setMemberName("FugaFuga");
+memberBhv.update(member);
+```
+
+#### 削除
+
+```java
+Member member = new Member();
+member.setMemberCode("200");
+memberBhv.delete(member);
+```
+
+---
+## DB管理支援ツールとして
+
+「タスク」と呼ばれる様々なツール
+
+* O/Rマッピング用コード生成ツール
+ * 既存のデータベースにJDBCで接続し、メタ情報を元にコードを生成
+ * テーブル一覧HTML、テーブル変更一覧HTMLといったドキュメントも生成
+
+---
+## テーブル一覧HTML
+
+[SchemaHTML](http://dbflute.seasar.org/ja/data/doc/basic/schema-maihamadb.html)
+<iframe src="http://dbflute.seasar.org/ja/data/doc/basic/schema-maihamadb.html"
+	style="width:100%;height:400px;"/>
+
+---
+## テーブル変更一覧HTML
+
+[HistoryHTML](http://dbflute.seasar.org/ja/data/doc/basic/history-maihamadb.html)
+<iframe src="http://dbflute.seasar.org/ja/data/doc/basic/history-maihamadb.html"
+	style="width:100%;height:400px;"/>
+
+---
+## DB管理支援ツールとして
+
+* スキーマを作成する(ReplaceSchema)
+ * DDLを実行し、Excel/CSV/TSVからデータをINSERTする
+* 一つ前のDDL＋Alter文＝最新のDDLかチェック(AlterCheck)
+ * メタ情報をチェックしてくれるAlterCheck
+* DB上のデータをファイルに出力(LoadDataReverse)
+ * ExcelやTSVに出力してくれる
+* DB定義ポリシーチェック(SchemaPolicyCheck)
+ * テーブル定義が規約沿っているかチェックしてくれる
+
+---
+## まとめ
+
+* 実DBからソースコードやドキュメントを作成してくれるので不一致がおこらない
+* テーブル変更がソースに反映されるのでコンパイルで影響箇所が分かる（タイプセーフ）
+* CBのメソッドは直感的な命名になっているので検索条件がわかりやすい
+* 作者（jflute）さん渾身のドキュメントが公開されているので安心
+* Twitterでもサポートもしてもらえる
+
+---
+DBFluteを使えばDB変更も安心！  
+JavaやC#開発をするときはぜひご利用ください！！
+
+---
+## おまけ
+他にも便利な○○Fluteシリーズがあります！
+
+* LastaFlute：Webフレームワーク
+ * LastaDI、LastaJob、LastaDocといった機能も
+* Alto DBFlute：DB管理支援ツールのみを切り出したGUIツール。PHPやRubyの現場でも実績あり
+* MailFlute：メールテンプレートからソースを自動生成
+* UTFlute：単体テスト支援ツール
+
+---
+## おまけ
+
+* TomcatBoot、JettyBoot：組み込みTomcat、Jettyのラッパー
+* ERFlute：EclipseのERMasterの拡張版
+* ESFlute：Elasticsearch用O/Rマッパー
+* KVSFlute、SolerFlute：KVS向けのO/Rマッパー
+
+---
+# おわり
+					</script>
+				</section>
+
+			</div>
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info https://github.com/hakimel/reveal.js#configuration
+			Reveal.initialize({
+				transition: 'default',
+
+				// More info https://github.com/hakimel/reveal.js#dependencies
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/zoom-js/zoom.js', async: true },
+					{ src: 'plugin/notes/notes.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } }
+				]
+			});
+			var configOptions = {"controls":true,"progress":true,"history":true,"center":true}
+			var initializeOptions = {};
+			extend(initializeOptions, baseOptions);
+			extend(initializeOptions, configOptions);
+			Reveal.initialize(initializeOptions);
+		</script>
+	</body>
+</html>
